@@ -1,0 +1,130 @@
+<title>Grid Studies</title>
+<style>
+  :root {
+    --ink: #E6E6E6;
+    --muted: rgba(230, 230, 230, 0.52);
+    --rule: rgba(230, 230, 230, 0.16);
+  }
+  html, body { margin: 0; background: #000; }
+  body {
+    color: var(--ink);
+    font: 14px/1.7 ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace;
+    letter-spacing: 0.03em;
+    padding: 0 1.5rem 6rem;
+  }
+  main { max-width: 768px; margin: 0 auto; }
+  header { padding: 5rem 0 1rem; }
+  h1 { margin: 0 0 0.75rem; font-size: 14px; font-weight: 400; letter-spacing: 0.05em; }
+  header p { margin: 0; color: var(--muted); max-width: 46ch; }
+  section { padding: 3.5rem 0 0; }
+  h2 {
+    margin: 0 0 0.25rem;
+    font-size: 14px; font-weight: 400; letter-spacing: 0.05em;
+  }
+  h2::before { content: "[ "; color: var(--muted); }
+  h2::after { content: " ]"; color: var(--muted); }
+  section p { margin: 0 0 1.25rem; color: var(--muted); max-width: 58ch; }
+  .frame {
+    border: 1px solid var(--rule);
+    background: #000;
+    overflow: hidden;
+  }
+  iframe { display: block; width: 100%; height: 268px; border: 0; }
+  .meta { margin-top: 0.6rem; display: flex; gap: 1.25rem; flex-wrap: wrap; color: var(--muted); }
+  a { color: var(--ink); text-decoration: none; border-bottom: 1px solid var(--rule); }
+  a:hover { border-bottom-color: var(--ink); }
+  @media (max-width: 640px) { iframe { height: 250px; } }
+</style>
+
+<main>
+  <header>
+    <h1>Grid Studies</h1>
+    <p>Nine animations on a grid of cells. Each one repeats exactly, drives its
+       cells from a closed-form field rather than a simulation, and answers the
+       cursor. Drag inside any panel. Click it.</p>
+  </header>
+
+  <section>
+    <h2>Swell</h2>
+    <p>A perspective ocean. Gravity waves summed at depth, faded out where the
+       grid can no longer resolve them, with glints on the crests. Drag to leave
+       a wake, click to drop a stone.</p>
+    <div class="frame"><iframe src="swell.html" title="Swell" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="swell.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Contour</h2>
+    <p>Level sets of a drifting scalar field. Dividing the distance-to-level by
+       the gradient keeps every line the same width, however steep the field is
+       there. The cursor lifts the surface and the lines close around it.</p>
+    <div class="frame"><iframe src="contour.html" title="Contour" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="contour.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Cascade</h2>
+    <p>A pendulum wave. Column <em>c</em> swings exactly 60 + <em>c</em> times per
+       loop, so the array slides out of step into travelling waves, then into
+       apparent disorder, then snaps back into a line. Press to send a flash
+       through it.</p>
+    <div class="frame"><iframe src="cascade.html" title="Cascade" loading="lazy"></iframe></div>
+    <div class="meta"><span>60s loop</span><a href="cascade.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Moiré</h2>
+    <p>A ripple tank. Sources drift on closed orbits and their circular fronts
+       sum, threading the panel with the hyperbolas where they cancel. Two share
+       a frequency and hold still; the third beats slowly against them.</p>
+    <div class="frame"><iframe src="moire.html" title="Moiré" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="moire.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Cells</h2>
+    <p>A Voronoi partition with sites on orbiting paths. A cell is lit by the
+       gap between its distance to the nearest site and to the second nearest,
+       which draws the boundaries without ever constructing them.</p>
+    <div class="frame"><iframe src="cells.html" title="Cells" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="cells.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Marble</h2>
+    <p>Domain warping. The field is sampled not where the cell sits but at a
+       point pushed around by a second field, itself pushed by a third. Two
+       rounds of that turn plain ripples into something that folds and stretches
+       like ink in water. Drag to stir it.</p>
+    <div class="frame"><iframe src="marble.html" title="Marble" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="marble.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Silk</h2>
+    <p>A drifting height field, lit rather than measured. The surface normal
+       comes from the analytic gradient, so the folds shade like cloth: a broad
+       falloff with a tight sheen along each crest. The cursor lifts the fabric
+       under it.</p>
+    <div class="frame"><iframe src="silk.html" title="Silk" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="silk.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Aurora</h2>
+    <p>Four curtains, each a line whose height is a sum of travelling sines,
+       drawn as a soft falloff either side. Where a sheet turns edge-on it
+       narrows and brightens, and that is the fold. Drag to take hold of one.</p>
+    <div class="frame"><iframe src="aurora.html" title="Aurora" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="aurora.html">open</a></div>
+  </section>
+
+  <section>
+    <h2>Rain</h2>
+    <p>Rings on still water. The shower is generated once and indexed by loop
+       time, so it repeats exactly while being far too finely spread to catch at
+       it. Click to add a drop.</p>
+    <div class="frame"><iframe src="rain.html" title="Rain" loading="lazy"></iframe></div>
+    <div class="meta"><span>24s loop</span><a href="rain.html">open</a></div>
+  </section>
+</main>

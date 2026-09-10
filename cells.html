@@ -1,0 +1,80 @@
+<title>Cells</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // A Voronoi partition whose sites orbit on closed harmonic paths, so the
+  // tiling shears and re-knits and returns to where it began. A cell is lit by
+  // how close it is to the boundary: the difference between its distance to
+  // the nearest site and to the second nearest is near zero exactly on the
+  // edges, which draws the diagram without ever computing it.
+  const EDGE = 17;      // boundary half-width, in px; below the cell pitch
+                      // the boundary breaks up into unconnected dots
+  const GLOW = 0.34;    // soft core around each site
+
+  Panel.create({
+    loop: 24,
+    scaleMin: 0.20, scaleExp: 0.62, alphaMin: 0.06,
+
+    init(g) {
+      const W = g.cols * g.pitchX, H = g.rows * g.pitchY;
+      const seeds = [
+        [0.13, 0.30, 0.09, 0.30, 1, 2, 0.0, 1.2],
+        [0.34, 0.68, 0.07, 0.24, 2, 1, 1.4, 3.0],
+        [0.52, 0.24, 0.10, 0.28, 1, 3, 2.7, 0.4],
+        [0.68, 0.72, 0.08, 0.22, 3, 1, 4.1, 2.2],
+        [0.85, 0.36, 0.06, 0.30, 2, 3, 5.4, 4.8],
+        [0.44, 0.50, 0.11, 0.20, 1, 1, 3.3, 5.9],
+        [0.94, 0.78, 0.05, 0.18, 3, 2, 0.8, 2.6],
+      ];
+      g.sites = seeds.map(([fx, fy, ax, ay, nx, ny, px, py]) => ({
+        x0: W * fx, y0: H * fy, ax: W * ax, ay: H * ay, nx, ny, px, py,
+      }));
+      g.pos = g.sites.map(() => ({ x: 0, y: 0, bias: 0 }));
+      g.maxD = Math.sqrt(W * W + H * H) * 0.45;
+    },
+
+    frame(g, t) {
+      const T = 2 * Math.PI * t / g.loop;
+      g.pos.length = g.sites.length;
+      for (let i = 0; i < g.sites.length; i += 1) {
+        const q = g.sites[i];
+        g.pos[i] = {
+          x: q.x0 + q.ax * Math.sin(q.nx * T + q.px),
+          y: q.y0 + q.ay * Math.sin(q.ny * T + q.py),
+          bias: 0,
+        };
+      }
+      if (g.pointer.active) {
+        g.pos.push({ x: g.pointer.x * g.pitchX, y: g.pointer.y * g.pitchY, bias: 0 });
+      }
+      // A press drops a site that opens up and then closes again, its bias
+      // pushing every boundary back out until the cell disappears.
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 3) continue;
+        g.pos.push({
+          x: im.x * g.pitchX, y: im.y * g.pitchY,
+          bias: 260 * Math.pow(age / 3, 2) - 30 * im.strength,
+        });
+      }
+    },
+
+    value(g, c, r, t) {
+      const px = (c + 0.5) * g.pitchX, py = (r + 0.5) * g.pitchY;
+      let d1 = Infinity, d2 = Infinity;
+      for (let i = 0; i < g.pos.length; i += 1) {
+        const p = g.pos[i];
+        const dx = px - p.x, dy = py - p.y;
+        const d = Math.sqrt(dx * dx + dy * dy) + p.bias;
+        if (d < d1) { d2 = d1; d1 = d; } else if (d < d2) { d2 = d; }
+      }
+      const edge = 1 - g.smoothstep(0, EDGE, d2 - d1);
+      return 0.06 + 0.78 * edge + GLOW * Math.exp(-d1 / 165);
+    },
+  });
+})();
+</script>

@@ -1,0 +1,87 @@
+<title>Marble</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // Domain warping. A smooth field is sampled not at the cell's own position
+  // but at a position pushed around by a second field, which is itself pushed
+  // by a third. Two rounds of that turn plain ripples into something that
+  // folds and stretches like ink dropped in water. Nothing is simulated: every
+  // frame is evaluated from scratch, and because each term advances a whole
+  // number of cycles per loop the whole thing closes.
+  const WARP1 = 1.7, WARP2 = 2.0;
+  const SWIRL = 2.6;      // radians the cursor twists the field at its centre
+  const SWIRL_R2 = 2 * 5.5 * 5.5;
+
+  const T = (spec) => spec.map(([a, kx, ky, n, ph]) => ({ a, kx, ky, n, ph }));
+  const FIELD = [
+    T([[1.00, 0.31, 0.22, 1, 0.0], [0.55, -0.19, 0.44, 2, 1.7], [0.30, 0.47, 0.13, 3, 4.1]]),
+    T([[1.00, 0.24, -0.33, 2, 2.2], [0.52, 0.41, 0.18, 3, 5.0], [0.28, -0.15, 0.49, 1, 0.6]]),
+    T([[1.00, 0.19, 0.14, 3, 3.3], [0.48, 0.28, -0.23, 1, 1.1], [0.26, -0.33, 0.20, 2, 4.7]]),
+    T([[1.00, -0.22, 0.17, 1, 5.4], [0.46, 0.15, 0.35, 2, 2.8], [0.24, 0.38, -0.11, 3, 0.9]]),
+    T([[1.00, 0.26, 0.19, 2, 1.4], [0.60, -0.34, 0.27, 3, 3.9], [0.34, 0.17, 0.41, 5, 5.6],
+       [0.20, 0.44, -0.21, 7, 2.0]]),
+  ];
+  const NORM = 1 / FIELD[4].reduce((s, q) => s + q.a, 0);
+
+  function band(terms, x, y, w) {
+    let s = 0;
+    for (let i = 0; i < terms.length; i += 1) {
+      const q = terms[i];
+      s += q.a * Math.sin(q.kx * x + q.ky * y + q.n * w + q.ph);
+    }
+    return s;
+  }
+
+  Panel.create({
+    loop: 24,
+    rows: 24, pitchX: 12, pitchY: 10, cellW: 10.5, cellH: 8.5, radius: 3,
+    scaleMin: 0.44, scaleExp: 0.58, alphaMin: 0.08,
+
+    init(g) { g.yScale = g.pitchY / g.pitchX; },
+    frame(g, t) { g.w = 2 * Math.PI * t / g.loop; },
+
+    value(g, c, r, t) {
+      let x = c, y = r * g.yScale;
+
+      // The cursor stirs: positions near it are rotated about it before the
+      // field is ever sampled, so the pattern itself twists rather than being
+      // painted over.
+      if (g.pointer.active) {
+        const dx = x - g.pointer.x, dy = y - g.pointer.y * g.yScale;
+        const a = SWIRL * Math.exp(-(dx * dx + dy * dy) / SWIRL_R2);
+        const sa = Math.sin(a), ca = Math.cos(a);
+        x = g.pointer.x + dx * ca - dy * sa;
+        y = g.pointer.y * g.yScale + dx * sa + dy * ca;
+      }
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 4.5) continue;
+        const dx = x - im.x, dy = y - im.y * g.yScale;
+        const s2 = 2 * (4 + 9 * age) * (4 + 9 * age) * 0.06;
+        const a = im.strength * 5.5 * Math.exp(-age / 1.7) *
+                  Math.exp(-(dx * dx + dy * dy) / s2);
+        const sa = Math.sin(a), ca = Math.cos(a);
+        x = im.x + dx * ca - dy * sa;
+        y = im.y * g.yScale + dx * sa + dy * ca;
+      }
+
+      const w = g.w;
+      const q1 = band(FIELD[0], x, y, w);
+      const q2 = band(FIELD[1], x, y, w);
+      const wx = x + WARP1 * q1, wy = y + WARP1 * q2;
+      const r1 = band(FIELD[2], wx, wy, w);
+      const r2 = band(FIELD[3], wx, wy, w);
+      const v = band(FIELD[4], x + WARP2 * r1, y + WARP2 * r2, w) * NORM;
+      // A ridge on the zero crossing: where the warped field changes sign it
+      // draws a thin bright vein, which is what reads as ink rather than fog.
+      const smooth = Math.pow(0.5 + 0.5 * v, 1.25);
+      const vein = Math.pow(1 - Math.abs(v), 2.4);
+      return 0.03 + 0.42 * smooth + 0.64 * vein;
+    },
+  });
+})();
+</script>

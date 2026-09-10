@@ -1,0 +1,70 @@
+<title>Rain</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // Rings on still water. The drop schedule is generated once and indexed by
+  // loop time, so the whole shower repeats exactly rather than drifting.
+  const SPEED = 95;    // px per second the front travels
+  const LIFE = 3.4;     // seconds before a ring is spent
+  const TAU = 1.7;     // amplitude decay
+  const K = 2 * Math.PI / 34;   // px between the crests inside a ring
+  const AMBIENT = 0.05;
+
+  function ring(d, age, strength) {
+    if (age < 0 || age > LIFE) return 0;
+    const front = SPEED * age;
+    const w = 5 + 2.4 * Math.sqrt(front);
+    const off = d - front;
+    if (off > 3.2 * w || off < -3.2 * w) return 0;
+    const amp = strength * Math.exp(-age / TAU) / (0.5 + front / 150);
+    return amp * Math.exp(-(off * off) / (2 * w * w)) * (0.62 + 0.38 * Math.cos(K * off));
+  }
+
+  Panel.create({
+    loop: 24,
+    scaleMin: 0.20, scaleExp: 0.60, alphaMin: 0.07,
+
+    init(g) {
+      // A fixed pseudo-random schedule: same shower every loop, but spread
+      // finely enough that the repeat is not something you can catch.
+      let seed = 20260910;
+      const rnd = () => (seed = (seed * 1664525 + 1013904223) >>> 0) / 4294967296;
+      const n = Math.max(14, Math.round(g.cols * 1.05));
+      g.drops = [];
+      for (let i = 0; i < n; i += 1) {
+        g.drops.push({
+          t: (i + rnd() * 0.85) * g.loop / n,
+          x: rnd() * g.cols * g.pitchX,
+          y: rnd() * g.rows * g.pitchY,
+          s: 0.5 + rnd() * 0.85,
+        });
+      }
+    },
+
+    value(g, c, r, t) {
+      const px = (c + 0.5) * g.pitchX;
+      const py = (r + 0.5) * g.pitchY;
+      // A slow swell under everything, so an idle panel still breathes.
+      let u = AMBIENT + 0.035 * (0.5 + 0.5 * Math.sin(0.26 * px / g.pitchX
+              + 0.44 * py / g.pitchY + 2 * Math.PI * t / g.loop * 3));
+
+      for (let i = 0; i < g.drops.length; i += 1) {
+        const d0 = g.drops[i];
+        let age = t - d0.t;
+        if (age < 0) age += g.loop;          // the tail of last loop's drop
+        const dx = px - d0.x, dy = py - d0.y;
+        u += ring(Math.sqrt(dx * dx + dy * dy), age, d0.s);
+      }
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const dx = px - im.x * g.pitchX, dy = py - im.y * g.pitchY;
+        u += ring(Math.sqrt(dx * dx + dy * dy), g.now - im.t0, im.strength * 1.5);
+      }
+      return u;
+    },
+  });
+})();
+</script>

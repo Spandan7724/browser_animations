@@ -1,0 +1,76 @@
+<title>Contour</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // Level sets of a drifting scalar field, drawn as contour lines.
+  //
+  // The trick that makes the lines clean is dividing the distance-to-level by
+  // the gradient: that converts a difference in field value into a distance in
+  // cells, so every line comes out the same width no matter how steep the
+  // field is there. Both the field and its gradient are analytic, so there is
+  // no sampling and no marching.
+  const BANDS = 1.0;
+  const LINE_IN = 0.20, LINE_OUT = 0.62;   // line half-width, in cells
+  const FLOOR = 0.05;
+
+  Panel.create({
+    loop: 24,
+    scaleMin: 0.20, scaleExp: 0.7, alphaMin: 0.06,
+
+    init(g) {
+      // Cells are not square, so y is rescaled to keep the field isotropic.
+      g.yScale = g.pitchY / g.pitchX;
+      g.terms = [
+        { kx:  0.150, ky:  0.110, n: 2, ph: 0.0, a: 1.00 },
+        { kx: -0.095, ky:  0.205, n: 3, ph: 1.9, a: 0.80 },
+        { kx:  0.220, ky: -0.075, n: 5, ph: 3.4, a: 0.55 },
+        { kx:  0.065, ky:  0.310, n: 7, ph: 5.1, a: 0.40 },
+      ];
+    },
+
+    value(g, c, r, t) {
+      const x = c, y = r * g.yScale;
+      let v = 0, gx = 0, gy = 0;
+      for (let i = 0; i < g.terms.length; i += 1) {
+        const q = g.terms[i];
+        const th = q.kx * x + q.ky * y + 2 * Math.PI * q.n * t / g.loop + q.ph;
+        const sn = Math.sin(th), cs = Math.cos(th);
+        v += q.a * sn;
+        gx += q.a * q.kx * cs;
+        gy += q.a * q.ky * cs;
+      }
+
+      // The cursor lifts the field under it, so the contours bulge around it.
+      if (g.pointer.active) {
+        const dx = x - g.pointer.x, dy = y - g.pointer.y * g.yScale;
+        const s2 = 22;
+        const e = 2.4 * Math.exp(-(dx * dx + dy * dy) / (2 * s2));
+        v += e;
+        gx += -e * dx / s2;
+        gy += -e * dy / s2;
+      }
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 4) continue;
+        const dx = x - im.x, dy = y - im.y * g.yScale;
+        const s2 = 14 + 26 * age;
+        const e = im.strength * 4.5 * Math.exp(-age / 1.6) *
+                  Math.exp(-(dx * dx + dy * dy) / (2 * s2));
+        v += e;
+        gx += -e * dx / s2;
+        gy += -e * dy / s2;
+      }
+
+      const q = v * BANDS;
+      const frac = q - Math.floor(q) - 0.5;          // signed, in band units
+      const grad = Math.sqrt(gx * gx + gy * gy) * BANDS + 1e-4;
+      const dist = Math.abs(frac) / grad;            // cells to the nearest line
+      return FLOOR + (1 - FLOOR) * (1 - g.smoothstep(LINE_IN, LINE_OUT, dist));
+    },
+  });
+})();
+</script>

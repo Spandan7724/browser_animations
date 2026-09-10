@@ -1,0 +1,70 @@
+<title>Moiré</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // A ripple tank. Point sources drift on closed elliptical paths and their
+  // circular wavefronts sum, so the panel is threaded with the hyperbolas
+  // where they cancel. Two sources share a frequency and hold their nodal
+  // lines steady; the third runs faster and beats slowly against them.
+  // Every frequency and every orbit is a whole number of cycles per loop.
+  const K = 2 * Math.PI / 78;   // px between crests; must stay well
+                                // above two cells or the grid aliases it
+  const GAMMA = 1.35;
+
+  Panel.create({
+    loop: 24,
+    scaleMin: 0.22, scaleExp: 0.68, alphaMin: 0.08,
+
+    init(g) {
+      const W = g.cols * g.pitchX, H = g.rows * g.pitchY;
+      g.src = [
+        { x0: W * 0.27, y0: H * 0.44, ax: W * 0.15, ay: H * 0.28, nx: 1, ny: 2, px: 0.0, py: 1.1, n: 20, ph: 0.0, a: 1.00 },
+        { x0: W * 0.71, y0: H * 0.56, ax: W * 0.12, ay: H * 0.24, nx: 2, ny: 1, px: 2.2, py: 0.3, n: 20, ph: 2.1, a: 0.88 },
+        { x0: W * 0.50, y0: H * 0.30, ax: W * 0.20, ay: H * 0.17, nx: 1, ny: 3, px: 4.0, py: 5.0, n: 25, ph: 4.3, a: 0.55 },
+      ];
+      g.norm = 1 / (g.src.reduce((s, q) => s + q.a, 0) * 0.55);
+      g.pos = g.src.map(() => ({ x: 0, y: 0, w: 0 }));
+    },
+
+    frame(g, t) {
+      const T = 2 * Math.PI * t / g.loop;
+      for (let i = 0; i < g.src.length; i += 1) {
+        const q = g.src[i], p = g.pos[i];
+        p.x = q.x0 + q.ax * Math.sin(q.nx * T + q.px);
+        p.y = q.y0 + q.ay * Math.sin(q.ny * T + q.py);
+        p.w = 2 * Math.PI * q.n / g.loop;
+      }
+    },
+
+    value(g, c, r, t) {
+      const px = (c + 0.5) * g.pitchX, py = (r + 0.5) * g.pitchY;
+      let f = 0;
+      for (let i = 0; i < g.src.length; i += 1) {
+        const q = g.src[i], p = g.pos[i];
+        const dx = px - p.x, dy = py - p.y;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        f += q.a * Math.sin(K * d - p.w * t + q.ph) / Math.pow(1 + d / 160, 0.35);
+      }
+      if (g.pointer.active) {
+        const dx = px - g.pointer.x * g.pitchX, dy = py - g.pointer.y * g.pitchY;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        f += 0.9 * Math.sin(K * d - 7.4 * g.now) / Math.pow(1 + d / 160, 0.35);
+      }
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 4) continue;
+        const dx = px - im.x * g.pitchX, dy = py - im.y * g.pitchY;
+        const d = Math.sqrt(dx * dx + dy * dy);
+        f += im.strength * 1.5 * Math.exp(-age / 1.5) *
+             Math.sin(K * d - 7.4 * g.now) / Math.pow(1 + d / 160, 0.35);
+      }
+      const v = 0.5 + 0.5 * Math.max(-1, Math.min(1, f * g.norm));
+      return Math.pow(v, GAMMA);
+    },
+  });
+})();
+</script>

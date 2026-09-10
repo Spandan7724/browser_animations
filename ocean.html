@@ -1,0 +1,401 @@
+<title>ASCII Ocean</title>
+<style>
+  html, body {
+    margin: 0;
+    height: 100%;
+    background: #000;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+    touch-action: none;
+  }
+</style>
+
+<canvas id="c"></canvas>
+
+<script>
+(() => {
+  'use strict';
+
+  // ------------------------------------------------------------------
+  // Type grid
+  // ------------------------------------------------------------------
+  const FONT_PX = 13;
+  const LINE_RATIO = 0.78;
+  const MONO = 'ui-monospace, SFMono-Regular, Menlo, Consolas, "DejaVu Sans Mono", monospace';
+
+  // Density ramp. The index maps straight from luminance, so glyph weight and
+  // alpha climb together and the tonal steps stay even.
+  const RAMP = ' .·:-=+*#%@';
+  const LEVELS = 112;
+
+  // ------------------------------------------------------------------
+  // Camera
+  // ------------------------------------------------------------------
+  // Rows are a perspective ladder. The top row is where the sightline almost
+  // grazes the water, the bottom row is where it looks down on it.
+  // A ground plane under a camera of focal length f at height H: a row py
+  // pixels below the horizon sits at z = f*H/py. Deriving both axes from the
+  // one projection keeps the foreshortening honest; a hand-rolled depth ramp
+  // lets the vertical and horizontal scales drift apart and the surface
+  // collapses into horizontal streaks.
+  const EYE_HEIGHT = 6.0;
+  const HORIZON_FRAC = -0.55;  // horizon just above the top edge
+
+  // ------------------------------------------------------------------
+  // Swell
+  // ------------------------------------------------------------------
+  // Eight components on a 24s loop, amplitude falling with wavelength the way
+  // a wind sea's spectrum does. Deep-water dispersion sets each frequency,
+  // then it is snapped to a whole multiple of the base so the sum closes
+  // exactly rather than drifting. Headings share a dominant direction with
+  // spread either side, which is what stops it reading as a plaid.
+  const LOOP_SECONDS = 24;
+  const BASE_OMEGA = 2 * Math.PI / LOOP_SECONDS;
+  const GRAVITY = 9.81;
+  const WAVES = [
+    { amplitude: 1.00, wavelength: 12.00, heading: 1.20, phase: 0.0 },
+    { amplitude: 0.75, wavelength: 7.40,  heading: 0.85, phase: 1.7 },
+    { amplitude: 0.55, wavelength: 4.60,  heading: 1.55, phase: 3.9 },
+    { amplitude: 0.41, wavelength: 2.85,  heading: 0.55, phase: 5.2 },
+    { amplitude: 0.30, wavelength: 1.75,  heading: 1.85, phase: 2.4 },
+    { amplitude: 0.22, wavelength: 1.08,  heading: 0.35, phase: 4.6 },
+    { amplitude: 0.16, wavelength: 0.67,  heading: 1.35, phase: 0.9 },
+    { amplitude: 0.12, wavelength: 0.41,  heading: 2.10, phase: 3.1 },
+  ].map((w) => {
+    const k = 2 * Math.PI / w.wavelength;
+    const harmonic = Math.max(1, Math.round(Math.sqrt(GRAVITY * k) / BASE_OMEGA));
+    return {
+      amplitude: w.amplitude,
+      phase: w.phase,
+      k,
+      omega: harmonic * BASE_OMEGA,
+      cos: Math.cos(w.heading),
+      sin: Math.sin(w.heading),
+    };
+  });
+  const NW = WAVES.length;
+
+  // ------------------------------------------------------------------
+  // Shading
+  // ------------------------------------------------------------------
+  const SIGMA = 2.2;         // how many standard deviations fill the tonal range
+  const NORM_FLOOR = 0.45;   // stops the far rows amplifying their last component
+  const TROUGH = 0.22;       // trough lift, applied before the gamma
+  const BODY_GAMMA = 1.40;
+  const BODY_GAIN = 0.93;
+  const SPEC_LO = 0.46;      // slope at which a glint starts
+  const SPEC_HI = 0.92;      // ...and reaches full strength
+  const SPEC_GAIN = 0.88;
+  const CREST_LO = 0.48;     // glints belong on crests, not on any lucky slope
+  const CREST_HI = 0.90;
+  const HAZE_LEVEL = 0.38;   // tone the distance settles toward
+  const HAZE_STRENGTH = 0.88;
+
+  // ------------------------------------------------------------------
+  // Ripples
+  // ------------------------------------------------------------------
+  const RIPPLE_SPEED = 3.2;    // world units per second
+  const RIPPLE_TAU = 1.5;      // decay time constant
+  const RIPPLE_K = 5.4;        // oscillations inside the expanding ring
+  const RIPPLE_MAX_R = 11;
+  const RIPPLE_H_GAIN = 0.9;   // how far a ripple bends the surface
+  const FOAM_GAIN = 0.35;      // ...and how much it brightens it directly
+  const WAKE_INTERVAL = 0.045; // seconds between wake drops while dragging
+  const WAKE_STRENGTH = 0.45;
+  const SPLASH_STRENGTH = 1.6;
+  const MAX_RIPPLES = 40;
+
+  const canvas = document.getElementById('c');
+  const ctx = canvas.getContext('2d', { alpha: false });
+
+  let cellW = 0, cellH = 0, cols = 0, rows = 0;
+  let atlas = null;
+  let rowData = [];
+  let midCol = 0;
+  const sinBuf = new Float64Array(NW);
+  const cosBuf = new Float64Array(NW);
+
+  const dpr = () => Math.min(2, window.devicePixelRatio || 1);
+  const smoothstep = (e0, e1, x) => {
+    const t = Math.max(0, Math.min(1, (x - e0) / (e1 - e0)));
+    return t * t * (3 - 2 * t);
+  };
+
+  // ------------------------------------------------------------------
+  // Glyph atlas: one pre-rendered tile per luminance level, colour and alpha
+  // baked in. Per-cell drawing is then a blit rather than a fillText, which is
+  // what makes a full screen of glyphs affordable every frame.
+  // ------------------------------------------------------------------
+  function buildAtlas() {
+    const a = document.createElement('canvas');
+    a.width = LEVELS * cellW;
+    a.height = cellH;
+    const g = a.getContext('2d');
+    g.font = `${Math.round(FONT_PX * dpr())}px ${MONO}`;
+    g.textAlign = 'center';
+    g.textBaseline = 'middle';
+
+    for (let i = 0; i < LEVELS; i += 1) {
+      const u = i / (LEVELS - 1);
+      const ch = RAMP[Math.min(RAMP.length - 1, Math.floor(u * RAMP.length))];
+      if (ch === ' ') continue;
+      // Cool grey in the troughs climbing to near-white at the crests, with the
+      // last stretch pushed the rest of the way so glints read as light.
+      const t = Math.min(1, u * 1.08);
+      const warm = Math.max(0, (u - 0.86) / 0.14);
+      const r = Math.min(255, Math.round(116 + (231 - 116) * t + warm * 24));
+      const gg = Math.min(255, Math.round(128 + (238 - 128) * t + warm * 17));
+      const b = Math.min(255, Math.round(146 + (246 - 146) * t + warm * 9));
+      g.fillStyle = `rgba(${r},${gg},${b},${(0.10 + 0.90 * u).toFixed(3)})`;
+      g.fillText(ch, i * cellW + cellW / 2, cellH / 2 + cellH * 0.02);
+    }
+    return a;
+  }
+
+  // ------------------------------------------------------------------
+  // Layout: rebuild the perspective ladder and the per-row wave constants.
+  // ------------------------------------------------------------------
+  function layout() {
+    const ratio = dpr();
+    canvas.width = Math.max(1, Math.floor(window.innerWidth * ratio));
+    canvas.height = Math.max(1, Math.floor(window.innerHeight * ratio));
+
+    const probe = document.createElement('canvas').getContext('2d');
+    probe.font = `${Math.round(FONT_PX * ratio)}px ${MONO}`;
+    cellW = Math.max(4, Math.round(probe.measureText('M').width));
+    cellH = Math.max(6, Math.round(FONT_PX * ratio * LINE_RATIO));
+
+    cols = Math.ceil(canvas.width / cellW);
+    rows = Math.ceil(canvas.height / cellH);
+    midCol = (cols - 1) / 2;
+
+    atlas = buildAtlas();
+    ctx.imageSmoothingEnabled = false;
+
+    const focal = rows * cellH;
+    const h0 = HORIZON_FRAC * rows;
+    const zs = new Float64Array(rows);
+    const xStepArr = new Float64Array(rows);
+    for (let r = 0; r < rows; r += 1) {
+      const py = Math.max(0.35 * cellH, (r - h0 + 0.5) * cellH);
+      zs[r] = focal * EYE_HEIGHT / py;
+      xStepArr[r] = cellW * zs[r] / focal;
+    }
+
+    rowData = [];
+    let hVarMax = 0, sVarMax = 0;
+
+    for (let r = 0; r < rows; r += 1) {
+      const t = (r + 0.5) / rows;
+      const z = zs[r];
+      const hi = Math.min(rows - 1, r + 1);
+      const lo = Math.max(0, r - 1);
+      const span = (hi - lo) || 1;
+      const dzdr = Math.abs((zs[hi] - zs[lo]) / span);
+      const dxdr = Math.abs((xStepArr[hi] - xStepArr[lo]) / span);
+
+      const base = new Float64Array(NW);
+      const ds = new Float64Array(NW);
+      const dc = new Float64Array(NW);
+      const aw = new Float64Array(NW);
+      const awk = new Float64Array(NW);
+      let hVar = 0, sVar = 0;
+
+      for (let i = 0; i < NW; i += 1) {
+        const w = WAVES[i];
+        const dth = w.k * w.cos * xStepArr[r];   // phase step per column
+        // Anti-aliasing. A component whose projected period falls under a
+        // couple of cells cannot be drawn, only aliased, so fade it out. This
+        // is what turns the far rows into haze instead of into noise, and it
+        // is why the foreground carries chop the distance does not.
+        const gradRow = Math.abs(w.k * w.sin * dzdr) +
+                        Math.abs(w.k * w.cos * dxdr * midCol * 0.6);
+        const grad = Math.max(Math.abs(dth), gradRow);
+        const weight = 1 - smoothstep(Math.PI * 0.30, Math.PI * 0.75, grad);
+
+        base[i] = w.k * w.sin * z - w.k * w.cos * xStepArr[r] * midCol + w.phase;
+        ds[i] = Math.sin(dth);
+        dc[i] = Math.cos(dth);
+        aw[i] = w.amplitude * weight;
+        awk[i] = aw[i] * w.k * w.sin;
+        hVar += aw[i] * aw[i];
+        sVar += awk[i] * awk[i];
+      }
+      if (hVar > hVarMax) hVarMax = hVar;
+      if (sVar > sVarMax) sVarMax = sVar;
+
+      rowData.push({
+        z, base, ds, dc, aw, awk, hVar, sVar,
+        haze: Math.pow(1 - t, 1.6) * HAZE_STRENGTH,
+        xStep: xStepArr[r],
+        xStart: -midCol * xStepArr[r],
+      });
+    }
+
+    // Incoherent components never sum to their total, so the range is set from
+    // the RMS instead. Per row, but floored against the strongest row: without
+    // that floor the far rows, where only the long swell survives, stretch a
+    // lone component across the whole ramp and band.
+    for (const rd of rowData) {
+      rd.hNorm = SIGMA * Math.sqrt(0.5 * Math.max(rd.hVar, NORM_FLOOR * hVarMax)) + 1e-6;
+      rd.sNorm = SIGMA * Math.sqrt(0.5 * Math.max(rd.sVar, NORM_FLOOR * sVarMax)) + 1e-6;
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Ripples: transient, so the ambient swell keeps its exact 24s loop.
+  // ------------------------------------------------------------------
+  const ripples = [];
+  let lastWake = 0;
+
+  function addRipple(x, z, strength) {
+    if (ripples.length >= MAX_RIPPLES) ripples.shift();
+    ripples.push({ x, z, t0: performance.now() / 1000, strength });
+  }
+
+  function pointerWorld(clientX, clientY) {
+    const ratio = dpr();
+    const col = (clientX * ratio) / cellW;
+    const row = Math.max(0, Math.min(rows - 1, Math.floor((clientY * ratio) / cellH)));
+    const rd = rowData[row];
+    if (!rd) return null;
+    return { x: rd.xStart + col * rd.xStep, z: rd.z };
+  }
+
+  canvas.addEventListener('pointermove', (e) => {
+    const now = performance.now() / 1000;
+    if (now - lastWake < WAKE_INTERVAL) return;
+    const p = pointerWorld(e.clientX, e.clientY);
+    if (!p) return;
+    lastWake = now;
+    addRipple(p.x, p.z, WAKE_STRENGTH);
+  }, { passive: true });
+
+  canvas.addEventListener('pointerdown', (e) => {
+    const p = pointerWorld(e.clientX, e.clientY);
+    if (p) addRipple(p.x, p.z, SPLASH_STRENGTH);
+  }, { passive: true });
+
+  // ------------------------------------------------------------------
+  // Frame
+  // ------------------------------------------------------------------
+  function render(nowMs) {
+    const time = nowMs / 1000 % LOOP_SECONDS;
+    const nowSec = nowMs / 1000;
+
+    // Retire spent ripples and hoist everything constant per ripple.
+    for (let i = ripples.length - 1; i >= 0; i -= 1) {
+      const rp = ripples[i];
+      const age = nowSec - rp.t0;
+      rp.front = RIPPLE_SPEED * age;
+      if (rp.front > RIPPLE_MAX_R || age > RIPPLE_TAU * 4) { ripples.splice(i, 1); continue; }
+      rp.width = 0.34 + 0.13 * rp.front;
+      rp.amp = rp.strength * Math.exp(-age / RIPPLE_TAU) / (0.6 + rp.front);
+      const inner = Math.max(0, rp.front - 3 * rp.width);
+      const outer = rp.front + 3 * rp.width;
+      rp.inner2 = inner * inner;
+      rp.outer2 = outer * outer;
+      rp.invW2 = 1 / (2 * rp.width * rp.width);
+    }
+    const nRip = ripples.length;
+
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    for (let r = 0; r < rows; r += 1) {
+      const rd = rowData[r];
+      const { base, ds, dc, aw, awk } = rd;
+      const z = rd.z;
+      const haze = rd.haze;
+      const invH = 1 / rd.hNorm;
+      const invS = 1 / rd.sNorm;
+      const rippleH = rd.hNorm * RIPPLE_H_GAIN;
+      const y = r * cellH;
+
+      for (let i = 0; i < NW; i += 1) {
+        const a = base[i] - WAVES[i].omega * time;
+        sinBuf[i] = Math.sin(a);
+        cosBuf[i] = Math.cos(a);
+      }
+
+      let wx = rd.xStart;
+
+      for (let c = 0; c < cols; c += 1) {
+        let h = 0, slope = 0;
+        for (let i = 0; i < NW; i += 1) {
+          h += aw[i] * sinBuf[i];
+          slope += awk[i] * cosBuf[i];
+        }
+        // Advance every component one column by rotating its phasor rather than
+        // calling sin and cos again. The cosine we need for the slope is then
+        // already in hand.
+        for (let i = 0; i < NW; i += 1) {
+          const s = sinBuf[i], co = cosBuf[i];
+          sinBuf[i] = s * dc[i] + co * ds[i];
+          cosBuf[i] = co * dc[i] - s * ds[i];
+        }
+
+        let foam = 0;
+        for (let i = 0; i < nRip; i += 1) {
+          const rp = ripples[i];
+          const dx = wx - rp.x, dz = z - rp.z;
+          const d2 = dx * dx + dz * dz;
+          if (d2 > rp.outer2 || d2 < rp.inner2) continue;
+          const off = Math.sqrt(d2) - rp.front;
+          const e = rp.amp * Math.exp(-off * off * rp.invW2);
+          h += e * Math.cos(RIPPLE_K * off) * rippleH;
+          foam += e;
+        }
+        wx += rd.xStep;
+
+        const hN = h * invH;
+        const hC = hN < -1 ? -1 : hN > 1 ? 1 : hN;
+        const body = Math.pow(TROUGH + (1 - TROUGH) * (0.5 + 0.5 * hC), BODY_GAMMA) * BODY_GAIN;
+        const sn = slope * invS;
+        const spec = smoothstep(SPEC_LO, SPEC_HI, sn > 1 ? 1 : sn) *
+                     smoothstep(CREST_LO, CREST_HI, 0.5 + 0.5 * hC) * SPEC_GAIN;
+
+        let u = body + spec + foam * FOAM_GAIN;
+        u = u * (1 - haze) + HAZE_LEVEL * haze;
+        const lvl = u <= 0 ? 0 : u >= 1 ? LEVELS - 1 : (u * (LEVELS - 1)) | 0;
+        if (lvl >= LEVELS / RAMP.length) {
+          ctx.drawImage(atlas, lvl * cellW, 0, cellW, cellH, c * cellW, y, cellW, cellH);
+        }
+      }
+    }
+  }
+
+  // ------------------------------------------------------------------
+  // Drive
+  // ------------------------------------------------------------------
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  let frame = 0;
+
+  const tick = (now) => {
+    render(now);
+    frame = requestAnimationFrame(tick);
+  };
+
+  const sync = () => {
+    if (frame) { cancelAnimationFrame(frame); frame = 0; }
+    if (reduced.matches) { render(0); return; }
+    if (!document.hidden) frame = requestAnimationFrame(tick);
+  };
+
+  layout();
+  document.addEventListener('visibilitychange', sync);
+  reduced.addEventListener('change', sync);
+  window.addEventListener('resize', () => {
+    layout();
+    if (reduced.matches || document.hidden) render(0);
+  });
+  sync();
+})();
+</script>

@@ -1,0 +1,74 @@
+<title>Silk</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // A drifting height field, lit rather than measured. The surface normal comes
+  // from the analytic gradient, so the folds are shaded the way cloth is: broad
+  // diffuse falloff with a tight sheen along the crest of each fold. No contour
+  // lines and no banding, which is what keeps it reading as fabric and not as a
+  // map.
+  const BUMP = 8.5;                       // how steep the folds stand up
+  const L = (() => { const v = [0.52, -0.62, 0.59];
+    const m = Math.hypot(v[0], v[1], v[2]); return [v[0] / m, v[1] / m, v[2] / m]; })();
+  const SHEEN = 0.55, SHEEN_POW = 26;
+  const AMBIENT = 0.10, DIFFUSE = 0.70;
+
+  const TERMS = [
+    { a: 1.00, kx: 0.115, ky: 0.180, n: 1, ph: 0.0 },
+    { a: 0.62, kx: -0.086, ky: 0.245, n: 2, ph: 1.9 },
+    { a: 0.40, kx: 0.205, ky: 0.092, n: 3, ph: 3.6 },
+    { a: 0.26, kx: 0.058, ky: 0.330, n: 5, ph: 5.2 },
+    { a: 0.16, kx: -0.240, ky: 0.140, n: 7, ph: 2.4 },
+  ];
+
+  Panel.create({
+    loop: 24,
+    rows: 24, pitchX: 12, pitchY: 10, cellW: 10.5, cellH: 8.5, radius: 3,
+    scaleMin: 0.46, scaleExp: 0.55, alphaMin: 0.08,
+
+    init(g) { g.yScale = g.pitchY / g.pitchX; },
+    frame(g, t) { g.w = 2 * Math.PI * t / g.loop; },
+
+    value(g, c, r, t) {
+      const x = c, y = r * g.yScale;
+      let gx = 0, gy = 0;
+      for (let i = 0; i < TERMS.length; i += 1) {
+        const q = TERMS[i];
+        const cs = Math.cos(q.kx * x + q.ky * y + q.n * g.w + q.ph);
+        gx += q.a * q.kx * cs;
+        gy += q.a * q.ky * cs;
+      }
+
+      // The cursor lifts the cloth; the gradient of that lift is what actually
+      // shows, as a ring of sheen around the raised patch.
+      if (g.pointer.active) {
+        const dx = x - g.pointer.x, dy = y - g.pointer.y * g.yScale;
+        const s2 = 34;
+        const e = 2.2 * Math.exp(-(dx * dx + dy * dy) / (2 * s2));
+        gx += -e * dx / s2;
+        gy += -e * dy / s2;
+      }
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 4.5) continue;
+        const dx = x - im.x, dy = y - im.y * g.yScale;
+        const s2 = 18 + 40 * age;
+        const e = im.strength * 5 * Math.exp(-age / 1.8) *
+                  Math.exp(-(dx * dx + dy * dy) / (2 * s2));
+        gx += -e * dx / s2;
+        gy += -e * dy / s2;
+      }
+
+      const nx = -gx * BUMP, ny = -gy * BUMP;
+      const inv = 1 / Math.sqrt(nx * nx + ny * ny + 1);
+      const d = (nx * L[0] + ny * L[1] + L[2]) * inv;
+      if (d <= 0) return AMBIENT * 0.5;
+      return AMBIENT + DIFFUSE * d + SHEEN * Math.pow(d, SHEEN_POW);
+    },
+  });
+})();
+</script>

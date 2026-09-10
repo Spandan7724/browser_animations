@@ -1,0 +1,253 @@
+<title>Wave Grid</title>
+<style>
+  :root {
+    /* A cell is 0.64em wide and a row 1.6em tall against a 14px base, with 3px
+       gutters. The grid is 9 rows deep. */
+    --cell: 8.96px;
+    --row: 22.4px;
+    --grid-h: 225.6px;
+    --measure: 44rem;
+  }
+
+  html, body {
+    background-color: #000000;
+  }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  /* Character-sized tracks rather than fractions, so a cell stays one glyph at any
+     width; space-between spends the leftover subpixels on the gaps to keep both
+     edges flush; the fixed height clips the surplus cells the count over-provides. */
+  .grid {
+    width: 100%;
+    max-width: var(--measure);
+    box-sizing: border-box;
+    padding-left: 1.5rem;
+    padding-right: 1.5rem;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, var(--cell));
+    grid-auto-rows: var(--row);
+    justify-content: space-between;
+    gap: 3px;
+    height: var(--grid-h);
+    overflow: hidden;
+  }
+  /* The script writes --v per cell per frame. Alpha rather than opacity, so crests
+     have somewhere bright to go. */
+  .grid-cell {
+    border-radius: 2px;
+    background-color: rgba(230, 230, 230, calc(0.06 + 0.86 * var(--v, 0)));
+  }
+  /* The reduced-motion stand-in for the cursor trail, which never runs there. */
+  @media (prefers-reduced-motion: reduce) {
+    .grid-cell:hover {
+      background-color: rgba(230, 230, 230, 0.92);
+    }
+  }
+</style>
+
+<div class="grid" aria-hidden="true" id="grid"></div>
+
+<script>
+(() => {
+  // ---- geometry, in the same units the stylesheet lays the grid out in ----
+  const CELL_COUNT = 756;          // over-provisioned; the fixed height clips the rest
+  const ROWS = 9;
+  const COL_PITCH = 11.96;         // 8.96 cell + 3 gap
+  const ROW_PITCH = 25.400000000000002; // 22.4 row + 3 gap
+
+  // ---- wave field ----
+  // A 24-second loop. Each component's angular frequency is snapped to a whole
+  // multiple of the base, so the whole sum repeats exactly rather than drifting.
+  const LOOP_SECONDS = 24;
+  const BASE_OMEGA = 2 * Math.PI / LOOP_SECONDS;
+  const GRAVITY = 9.81;
+  const WAVES = [
+    { amplitude: 1,   wavelength: 7.5, heading: 1.18, phase: 0   },
+    { amplitude: 0.66, wavelength: 4.6, heading: 0.88, phase: 1.7 },
+    { amplitude: 0.42, wavelength: 2.7, heading: 1.95, phase: 3.9 },
+    { amplitude: 0.26, wavelength: 1.8, heading: 2.32, phase: 5.2 },
+  ].map((w) => {
+    const k = 2 * Math.PI / w.wavelength;
+    // Deep-water dispersion, then quantised to the loop.
+    const harmonic = Math.max(1, Math.round(Math.sqrt(GRAVITY * k) / BASE_OMEGA));
+    return {
+      amplitude: w.amplitude,
+      phase: w.phase,
+      k,
+      omega: harmonic * BASE_OMEGA,
+      cos: Math.cos(w.heading),
+      sin: Math.sin(w.heading),
+    };
+  });
+  const AMP_SUM = WAVES.reduce((sum, w) => sum + w.amplitude, 0);
+
+  const EYE_HEIGHT = 1;
+  const PITCH_NEAR = 0.095;  // grazing angle at the far row
+  const PITCH_FAR = 0.52;    // steeper angle at the near row
+  const COLUMN_SPREAD = 0.055;
+  const CREST_SHARPEN = 1.45;
+  const FOG_FLOOR = 0.84;
+
+  // ---- cursor trail ----
+  const TRAIL_HALFLIFE = 0.32; // seconds of exponential decay
+  const CURSOR_SIGMA = 38;
+  const CURSOR_REACH = CURSOR_SIGMA * 3;
+
+  // Rows are a perspective ladder: row 0 sits far away where the sightline
+  // grazes the water, row 8 sits near where it looks down on it.
+  function makeWaveSampler(columns) {
+    const midColumn = (columns - 1) / 2;
+    const rows = Array.from({ length: ROWS }, (_, row) => {
+      const t = (row + 0.5) / ROWS;
+      const pitch = PITCH_NEAR + (PITCH_FAR - PITCH_NEAR) * t;
+      const depth = EYE_HEIGHT / Math.tan(pitch);
+      return {
+        depth,
+        fog: FOG_FLOOR + (1 - FOG_FLOOR) * (1 - t),
+        alongHeading: WAVES.map((w) => w.k * depth * w.sin),
+        perColumn: WAVES.map((w) => w.k * depth * COLUMN_SPREAD * w.cos),
+      };
+    });
+
+    return (column, row, time) => {
+      const r = rows[row];
+      if (!r) return 0;
+      const offset = column - midColumn;
+      let sum = 0;
+      for (let i = 0; i < WAVES.length; i += 1) {
+        const w = WAVES[i];
+        const theta = r.alongHeading[i] + r.perColumn[i] * offset - w.omega * time + w.phase;
+        sum += w.amplitude * Math.sin(theta);
+      }
+      return Math.pow(0.5 + 0.5 * sum / AMP_SUM, CREST_SHARPEN) * r.fog;
+    };
+  }
+
+  // The stylesheet decides how many columns fit; read them back rather than
+  // recompute the fit here.
+  function countColumns(el) {
+    return getComputedStyle(el).gridTemplateColumns
+      .split(/\s+/)
+      .filter((track) => track.endsWith('px'))
+      .length;
+  }
+
+  const grid = document.getElementById('grid');
+  const fragment = document.createDocumentFragment();
+  for (let i = 0; i < CELL_COUNT; i += 1) {
+    const cell = document.createElement('span');
+    cell.className = 'grid-cell';
+    fragment.appendChild(cell);
+  }
+  grid.appendChild(fragment);
+
+  let teardown = null;
+
+  function animate(columns) {
+    if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return null;
+
+    const cells = Array.from(grid.children);
+    const count = Math.min(cells.length, columns * ROWS);
+    const sample = makeWaveSampler(columns);
+    const written = new Float32Array(count).fill(-1); // last value pushed to the DOM
+    const trail = new Float32Array(count);            // decaying cursor heat
+
+    let frame = 0;
+    let lastTime = 0;
+    let onScreen = true;
+    let pointerX = 0;
+    let pointerY = 0;
+    let pointerInside = false;
+
+    const tick = (now) => {
+      const time = now / 1000 % LOOP_SECONDS;
+      const dt = lastTime ? (now - lastTime) / 1000 : 0;
+      lastTime = now;
+      const decay = Math.exp(-dt / TRAIL_HALFLIFE);
+
+      for (let i = 0; i < count; i += 1) {
+        const column = i % columns;
+        const row = (i - column) / columns;
+        let heat = trail[i] * decay;
+
+        if (pointerInside) {
+          const dx = column * COL_PITCH - pointerX;
+          const dy = row * ROW_PITCH - pointerY;
+          if (dx > -CURSOR_REACH && dx < CURSOR_REACH && dy > -CURSOR_REACH && dy < CURSOR_REACH) {
+            const glow = Math.exp(-(dx * dx + dy * dy) / (2 * CURSOR_SIGMA * CURSOR_SIGMA));
+            if (glow > heat) heat = glow;
+          }
+        }
+        trail[i] = heat;
+
+        const wave = sample(column, row, time);
+        const value = wave + (1 - wave) * heat; // screen blend: the trail lifts, never dims
+        if (Math.abs(value - written[i]) >= 0.004) {
+          written[i] = value;
+          cells[i].style.setProperty('--v', value.toFixed(3));
+        }
+      }
+      frame = requestAnimationFrame(tick);
+    };
+
+    const sync = () => {
+      if (onScreen && !document.hidden) {
+        if (!frame) {
+          lastTime = 0;
+          frame = requestAnimationFrame(tick);
+        }
+      } else if (frame) {
+        cancelAnimationFrame(frame);
+        frame = 0;
+      }
+    };
+
+    const onPointerMove = (e) => {
+      const rect = grid.getBoundingClientRect();
+      pointerX = e.clientX - rect.left;
+      pointerY = e.clientY - rect.top;
+      pointerInside = true;
+    };
+    const onPointerOut = () => { pointerInside = false; };
+
+    const observer = new IntersectionObserver((entries) => {
+      onScreen = entries.some((entry) => entry.isIntersecting);
+      sync();
+    });
+    observer.observe(grid);
+    document.addEventListener('visibilitychange', sync);
+    grid.addEventListener('pointermove', onPointerMove, { passive: true });
+    grid.addEventListener('pointerleave', onPointerOut, { passive: true });
+    grid.addEventListener('pointercancel', onPointerOut, { passive: true });
+    sync();
+
+    return () => {
+      if (frame) cancelAnimationFrame(frame);
+      observer.disconnect();
+      document.removeEventListener('visibilitychange', sync);
+      grid.removeEventListener('pointermove', onPointerMove);
+      grid.removeEventListener('pointerleave', onPointerOut);
+      grid.removeEventListener('pointercancel', onPointerOut);
+      cells.forEach((cell) => cell.style.removeProperty('--v'));
+    };
+  }
+
+  let columns = 0;
+  const refresh = () => {
+    const next = countColumns(grid);
+    if (next <= 0 || next === columns) return;
+    columns = next;
+    if (teardown) teardown();
+    teardown = animate(columns);
+  };
+
+  refresh();
+  new ResizeObserver(refresh).observe(grid);
+})();
+</script>

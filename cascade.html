@@ -1,0 +1,57 @@
+<title>Cascade</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // A pendulum wave. Column c completes exactly N0 + c swings per loop, so the
+  // whole array is a set of harmonics: it falls out of step into travelling
+  // waves, then into apparent chaos, then snaps back into a line. Because the
+  // counts are whole numbers the return is exact, not approximate.
+  const N0 = 60;
+  const SIG = 0.95;                       // dot radius, in rows
+  const TRAIL = [1, 0.52, 0.27, 0.13];    // motion blur, sampled backwards
+  const TRAIL_DT = 0.028;
+  const FLASH_SPEED = 30;                 // columns per second
+
+  Panel.create({
+    loop: 60,
+    rows: 20,
+    scaleMin: 0.18, scaleExp: 0.7, alphaMin: 0.06,
+
+    init(g) {
+      g.mid = (g.rows - 1) / 2;
+      g.amp = g.mid - 0.7;
+    },
+
+    value(g, c, r, t) {
+      const w = 2 * Math.PI * (N0 + c) / g.loop;
+      let u = 0.045;
+      for (let k = 0; k < TRAIL.length; k += 1) {
+        const y = g.mid - g.amp * Math.cos(w * (t - k * TRAIL_DT));
+        const d = r - y;
+        u += TRAIL[k] * Math.exp(-(d * d) / (2 * SIG * SIG));
+      }
+
+      // The cursor leans on the column under it, and on its neighbours.
+      if (g.pointer.active) {
+        const dc = c - g.pointer.x;
+        u *= 1 + 0.85 * Math.exp(-(dc * dc) / 18);
+        u += 0.05 * Math.exp(-(dc * dc) / 8);
+      }
+
+      // A press sends a flash out through the array in both directions.
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 2.2) continue;
+        const off = Math.abs(c - im.x) - FLASH_SPEED * age;
+        u += im.strength * 0.85 * Math.exp(-age / 0.75) *
+             Math.exp(-(off * off) / 9);
+      }
+      return u;
+    },
+  });
+})();
+</script>
