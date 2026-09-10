@@ -1,0 +1,85 @@
+<title>Orbits</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // Five bodies on closed epicyclic paths, each with a tail. The tail is not
+  // remembered from earlier frames: because the paths are closed forms, the
+  // body's own past is evaluated on demand, a dozen samples back along the
+  // curve. That keeps the piece stateless, so it can be paused, resized or
+  // resumed and still be in exactly the right place.
+  const BODIES = [
+    { ax: 0.34, ay: 0.34, n1: 3, n2: 5, p1: 0.0, p2: 1.1, e: 0.085, m: 13, q: 2.0, s: 0.95 },
+    { ax: 0.40, ay: 0.26, n1: 5, n2: 3, p1: 2.3, p2: 4.0, e: 0.070, m: 17, q: 0.4, s: 0.78 },
+    { ax: 0.22, ay: 0.40, n1: 7, n2: 4, p1: 4.6, p2: 2.2, e: 0.100, m: 9,  q: 3.8, s: 0.62 },
+    { ax: 0.44, ay: 0.18, n1: 4, n2: 7, p1: 1.4, p2: 5.5, e: 0.075, m: 11, q: 1.6, s: 0.48 },
+  ];
+  const TAIL = 16;          // samples back along each path
+  const TAIL_DT = 0.026;    // seconds between them
+  const HEAD_R2 = 2 * 0.78 * 0.78;
+  const CUT = 18;           // squared distance past which a sample is skipped
+
+  Panel.create({
+    loop: 24,
+    rows: 22, pitchX: 12, pitchY: 10, cellW: 10.5, cellH: 8.5, radius: 3,
+    scaleMin: 0.16, scaleExp: 0.7, alphaMin: 0.05,
+    wakeInterval: 0.05, impulseLife: 1.6,
+
+    init(g) {
+      g.yScale = g.pitchY / g.pitchX;
+      g.cx = g.cols / 2;
+      g.cy = g.rows * g.yScale / 2;
+      g.rx = g.cols;
+      g.ry = g.rows * g.yScale;
+      g.pts = [];
+    },
+
+    frame(g, t) {
+      // Rebuild every body's recent history once per frame, then the per-cell
+      // pass is only distances.
+      g.pts.length = 0;
+      for (let b = 0; b < BODIES.length; b += 1) {
+        const q = BODIES[b];
+        for (let k = 0; k < TAIL; k += 1) {
+          const tt = t - k * TAIL_DT;
+          const w = 2 * Math.PI * tt / g.loop;
+          const x = g.cx + g.rx * q.ax * Math.sin(q.n1 * w + q.p1)
+                  + g.rx * q.e * Math.sin(q.m * w + q.q);
+          const y = g.cy + g.ry * q.ay * Math.sin(q.n2 * w + q.p2)
+                  + g.ry * q.e * Math.cos(q.m * w + q.q);
+          const fade = Math.pow(1 - k / TAIL, 1.7);
+          g.pts.push({ x, y, w: q.s * fade, r2: HEAD_R2 * (1 + 2.2 * k / TAIL) });
+        }
+      }
+      // The cursor's own history is already kept for us, so it gets a tail of
+      // the same kind for free.
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        const fade = Math.max(0, 1 - age / 1.6);
+        if (fade <= 0) continue;
+        g.pts.push({
+          x: im.x, y: im.y * g.yScale,
+          w: (im.strength > 0.6 ? 1.5 : 0.85) * fade * fade,
+          r2: HEAD_R2 * (1 + 3 * age),
+        });
+      }
+    },
+
+    value(g, c, r, t) {
+      const x = c + 0.5, y = (r + 0.5) * g.yScale;
+      let u = 0.04;
+      for (let i = 0; i < g.pts.length; i += 1) {
+        const p = g.pts[i];
+        const dx = x - p.x, dy = y - p.y;
+        const d2 = dx * dx + dy * dy;
+        if (d2 > CUT) continue;
+        u += p.w * Math.exp(-d2 / p.r2);
+      }
+      return u;
+    },
+  });
+})();
+</script>

@@ -1,0 +1,97 @@
+<title>Kaleido</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // A mirror frieze. The cell's position is folded before the field is ever
+  // sampled: reflected about the panel's midline, then wrapped into a repeating
+  // bay and reflected again about the middle of that. One drifting field
+  // painted inside a single bay therefore appears four ways per bay, all the
+  // way along. Nothing is copied and no seam is drawn; the symmetry lives in
+  // the coordinate, which is why the joins stay exact while the field moves
+  // underneath them. The bay width itself breathes on a whole number of cycles
+  // per loop, so the whole frieze still closes.
+  const TERMS = [
+    { a: 1.00, kx: 0.52, ky: 0.34, n: 1, ph: 0.0 },
+    { a: 0.68, kx: -0.31, ky: 0.71, n: 2, ph: 1.9 },
+    { a: 0.45, kx: 0.86, ky: 0.22, n: 3, ph: 3.7 },
+    { a: 0.30, kx: 0.19, ky: -0.98, n: 5, ph: 5.4 },
+  ];
+  const NORM = 1 / TERMS.reduce((s, q) => s + q.a, 0);
+  const BAY = 19, BAY_SWING = 2.4, BAY_N = 1;
+  const TOUCH_R2 = 2 * 2.4 * 2.4;
+
+  function foldX(x, period) {
+    const m = x - Math.floor(x / period) * period;   // into one bay
+    return Math.abs(m - period / 2);                 // and mirrored inside it
+  }
+
+  Panel.create({
+    loop: 24,
+    rows: 24, pitchX: 12, pitchY: 10, cellW: 10.5, cellH: 8.5, radius: 3,
+    scaleMin: 0.26, scaleExp: 0.62, alphaMin: 0.07,
+
+    init(g) {
+      g.yScale = g.pitchY / g.pitchX;
+      g.cy = g.rows * g.yScale / 2;
+    },
+
+    frame(g, t) {
+      g.w = 2 * Math.PI * t / g.loop;
+      g.period = BAY + BAY_SWING * Math.sin(BAY_N * g.w);
+
+      g.touch = null;
+      if (g.pointer.active) {
+        g.touch = {
+          x: foldX(g.pointer.x, g.period),
+          y: Math.abs(g.pointer.y * g.yScale - g.cy),
+        };
+      }
+      g.hits = [];
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 3.5) continue;
+        g.hits.push({
+          x: foldX(im.x, g.period),
+          y: Math.abs(im.y * g.yScale - g.cy),
+          amp: im.strength * Math.exp(-age / 1.2),
+          r2: TOUCH_R2 * (1 + 3 * age),
+        });
+      }
+    },
+
+    value(g, c, r, t) {
+      const fx = foldX(c + 0.5, g.period);
+      const fy = Math.abs((r + 0.5) * g.yScale - g.cy);
+
+      let v = 0;
+      for (let i = 0; i < TERMS.length; i += 1) {
+        const q = TERMS[i];
+        v += q.a * Math.sin(q.kx * fx + q.ky * fy + q.n * g.w + q.ph);
+      }
+      v = v * NORM * 0.78 + 0.34 * Math.sin(0.78 * Math.hypot(fx, fy) - 2 * g.w);
+      const vc = Math.max(-1, Math.min(1, v));
+
+      // A ridge on the zero crossing: mirrored, a smooth field still looks
+      // smooth, but a thin bright curve makes every join visible.
+      let u = 0.05 + 0.95 * Math.pow(1 - Math.abs(vc), 2.0);
+      u *= 0.62 + 0.38 * Math.exp(-fy / 9);
+
+      // A single touch shows up in all four reflections of every bay.
+      if (g.touch) {
+        const dx = fx - g.touch.x, dy = fy - g.touch.y;
+        u += 0.6 * Math.exp(-(dx * dx + dy * dy) / TOUCH_R2);
+      }
+      for (let i = 0; i < g.hits.length; i += 1) {
+        const h = g.hits[i];
+        const dx = fx - h.x, dy = fy - h.y;
+        u += 0.9 * h.amp * Math.exp(-(dx * dx + dy * dy) / h.r2);
+      }
+      return u;
+    },
+  });
+})();
+</script>

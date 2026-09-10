@@ -1,0 +1,123 @@
+<title>Revival</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // A wave packet in a box. Every standing mode of an infinite square well
+  // carries energy proportional to n squared, so at one particular time each
+  // mode's phase has advanced by a whole number of turns at once, and the
+  // packet, having spread and shattered into a lattice of copies on the way,
+  // puts itself back together exactly. The loop is that revival time.
+  //
+  // The state stays separable, so the field is a column term times a row term.
+  // Both are rebuilt once per frame and a cell is then a single multiply.
+  const NX = 22, NY = 16;
+  const GAIN = 30;
+  const LENS_R2 = 2 * 3.4 * 3.4;
+
+  // Sine-series coefficients of a Gaussian packet carrying momentum, by
+  // straight quadrature. Done once per launch, never per frame.
+  function coeffs(modes, x0, sigma, k0) {
+    const S = 480, out = [];
+    for (let n = 1; n <= modes; n += 1) {
+      let re = 0, im = 0;
+      for (let i = 0; i < S; i += 1) {
+        const x = (i + 0.5) / S;
+        const env = Math.exp(-((x - x0) * (x - x0)) / (2 * sigma * sigma));
+        const s = Math.sin(n * Math.PI * x);
+        re += env * Math.cos(k0 * x) * s;
+        im += env * Math.sin(k0 * x) * s;
+      }
+      out.push({ re: re / S, im: im / S });
+    }
+    return out;
+  }
+
+  function table(cells, modes) {
+    const t = [];
+    for (let i = 0; i < cells; i += 1) {
+      const x = (i + 0.5) / cells, row = new Float64Array(modes);
+      for (let n = 1; n <= modes; n += 1) row[n - 1] = Math.sin(n * Math.PI * x);
+      t.push(row);
+    }
+    return t;
+  }
+
+  // |sum c_n sin(n pi x) exp(-i 2pi n^2 tau)|^2 along one axis.
+  function axis(c, tab, cells, tau, out) {
+    const cs = new Float64Array(c.length), sn = new Float64Array(c.length);
+    for (let n = 0; n < c.length; n += 1) {
+      const th = 2 * Math.PI * (n + 1) * (n + 1) * tau;
+      cs[n] = Math.cos(th); sn[n] = Math.sin(th);
+    }
+    for (let i = 0; i < cells; i += 1) {
+      const row = tab[i];
+      let re = 0, im = 0;
+      for (let n = 0; n < c.length; n += 1) {
+        const s = row[n];
+        re += s * (c[n].re * cs[n] + c[n].im * sn[n]);
+        im += s * (c[n].im * cs[n] - c[n].re * sn[n]);
+      }
+      out[i] = re * re + im * im;
+    }
+  }
+
+  Panel.create({
+    loop: 24,
+    rows: 24, pitchX: 12, pitchY: 10, cellW: 10.5, cellH: 8.5, radius: 3,
+    scaleMin: 0.20, scaleExp: 0.6, alphaMin: 0.06,
+    wakeInterval: 1e6, impulseLife: 0.2,   // only a press relaunches the packet
+
+    init(g) {
+      g.tx = table(g.cols, NX);
+      g.ty = table(g.rows, NY);
+      g.ax = new Float64Array(g.cols);
+      g.ay = new Float64Array(g.rows);
+      g.t0 = 0;
+      g.lens = null;
+      g.scale = 1;
+
+      g.launch = (x0, y0) => {
+        g.cxs = coeffs(NX, x0, 0.085, 8 * Math.PI);
+        g.cys = coeffs(NY, y0, 0.130, -4 * Math.PI);
+        // Scale from the packet's own peak at launch, so a full revival tops
+        // out and the spread states in between sit properly below it.
+        axis(g.cxs, g.tx, g.cols, 0, g.ax);
+        axis(g.cys, g.ty, g.rows, 0, g.ay);
+        let mx = 0, my = 0;
+        for (let i = 0; i < g.ax.length; i += 1) if (g.ax[i] > mx) mx = g.ax[i];
+        for (let i = 0; i < g.ay.length; i += 1) if (g.ay[i] > my) my = g.ay[i];
+        g.scale = 1 / Math.max(1e-12, mx * my);
+      };
+      g.launch(0.30, 0.36);
+    },
+
+    frame(g) {
+      for (let i = g.impulses.length - 1; i >= 0; i -= 1) {
+        const im = g.impulses[i];
+        if (im.strength > 0.6) {
+          g.launch(Math.min(0.92, Math.max(0.08, im.x / g.cols)),
+                   Math.min(0.92, Math.max(0.08, im.y / g.rows)));
+          g.t0 = g.now;
+        }
+        g.impulses.splice(i, 1);
+      }
+      const tau = ((((g.now - g.t0) % g.loop) + g.loop) % g.loop) / g.loop;
+      axis(g.cxs, g.tx, g.cols, tau, g.ax);
+      axis(g.cys, g.ty, g.rows, tau, g.ay);
+      g.lens = g.pointer.active ? { x: g.pointer.x, y: g.pointer.y } : null;
+    },
+
+    value(g, c, r) {
+      let u = 1 - Math.exp(-GAIN * g.ax[c] * g.ay[r] * g.scale);
+      if (g.lens) {
+        const dx = c + 0.5 - g.lens.x, dy = (r + 0.5 - g.lens.y) * (g.pitchY / g.pitchX);
+        u += 0.22 * Math.exp(-(dx * dx + dy * dy) / LENS_R2);
+      }
+      return 0.045 + 0.95 * u;
+    },
+  });
+})();
+</script>

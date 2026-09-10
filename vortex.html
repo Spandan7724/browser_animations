@@ -1,0 +1,73 @@
+<title>Vortex</title>
+<link rel="stylesheet" href="piece.css">
+<canvas id="panel"></canvas>
+<script src="panel.js"></script>
+<script>
+(() => {
+  'use strict';
+  // Logarithmic spiral density waves. The phase of each arm set is m*theta plus
+  // k*log(r), which is the one combination that keeps a spiral's pitch the same
+  // at every radius, so the arms stay the same shape as they sweep out.
+  //
+  // Toward the centre the arms crowd together faster than the grid can hold
+  // them, so each set is faded out below the radius where its own angular step
+  // exceeds what a cell can carry. That is what leaves the smooth core.
+  const ARMS = [
+    { m: 2, k: 3.4, w: 2, ph: 0.0, a: 1.00 },
+    { m: 3, k: -2.1, w: 3, ph: 2.1, a: 0.66 },
+    { m: 5, k: 4.6, w: 5, ph: 4.4, a: 0.42 },
+    { m: 1, k: 1.6, w: 1, ph: 5.6, a: 0.30 },
+  ];
+  const SHEAR = 2.4, SHEAR_R2 = 2 * 6 * 6;
+
+  Panel.create({
+    loop: 24,
+    rows: 24, pitchX: 12, pitchY: 10, cellW: 10.5, cellH: 8.5, radius: 3,
+    scaleMin: 0.30, scaleExp: 0.62, alphaMin: 0.07,
+
+    init(g) {
+      g.yScale = g.pitchY / g.pitchX;
+      g.cx = g.cols / 2;
+      g.cy = g.rows * g.yScale / 2;
+      g.norm = 1 / (ARMS.reduce((s, q) => s + q.a, 0) * 0.55);
+    },
+    frame(g, t) { g.w = 2 * Math.PI * t / g.loop; },
+
+    value(g, c, r, t) {
+      const dx = c + 0.5 - g.cx, dy = (r + 0.5) * g.yScale - g.cy;
+      const rad = Math.sqrt(dx * dx + dy * dy);
+      let th = Math.atan2(dy, dx);
+
+      // The cursor drags on the rotation, shearing the arms where it passes.
+      if (g.pointer.active) {
+        const px = g.pointer.x - g.cx, py = g.pointer.y * g.yScale - g.cy;
+        const ex = dx - px, ey = dy - py;
+        th += SHEAR * Math.exp(-(ex * ex + ey * ey) / SHEAR_R2);
+      }
+      for (let i = 0; i < g.impulses.length; i += 1) {
+        const im = g.impulses[i];
+        const age = g.now - im.t0;
+        if (age > 3.5) continue;
+        const ex = dx - (im.x - g.cx), ey = dy - (im.y * g.yScale - g.cy);
+        const s2 = SHEAR_R2 * (1 + 1.6 * age);
+        th += SHEAR * 1.6 * im.strength * Math.exp(-age / 1.4) *
+              Math.exp(-(ex * ex + ey * ey) / s2);
+      }
+
+      const lr = Math.log(Math.max(1.1, rad));
+      let v = 0;
+      for (let i = 0; i < ARMS.length; i += 1) {
+        const q = ARMS[i];
+        // Below this radius the arm turns faster than one cell can follow.
+        const fade = g.smoothstep(0, 1, (rad * Math.PI * 0.3) / (Math.abs(q.m) + Math.abs(q.k)));
+        v += q.a * fade * Math.sin(q.m * th + q.k * lr - q.w * g.w + q.ph);
+      }
+      v = Math.max(-1, Math.min(1, v * g.norm));
+
+      const core = 0.45 * Math.exp(-rad / 4.5);
+      const halo = 0.58 + 0.42 * Math.exp(-rad / 22);
+      return 0.04 + core + halo * Math.pow(0.5 + 0.5 * v, 1.6) * 0.95;
+    },
+  });
+})();
+</script>
